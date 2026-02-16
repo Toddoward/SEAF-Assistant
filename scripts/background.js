@@ -4,6 +4,7 @@
  */
 
 const MANGHO_LIST_URL = "https://gall.dcinside.com/mgallery/board/lists/?id=helldiversseries&sort_type=N&search_head=60";
+const DEADLINE = 5 * 60 * 1000; // 5분
 
 let lastSeenPostId = null;
 
@@ -25,7 +26,7 @@ async function setupAlarm() {
 }
 
 /**
- * 게시글 상세 페이지에서 Steam 로비 링크 추출
+ * 게시글 id로부터 Steam 로비 링크 추출
  */
 async function extractLobbyLink(postId) {
   try {
@@ -34,19 +35,12 @@ async function extractLobbyLink(postId) {
     const html = await response.text();
     
     // steam://joinlobby 직접 링크 찾기
-    const lobbyMatch = html.match(/steam:\/\/joinlobby\/\d+\/\d+\/\d+/);
+    const lobbyMatch = html.match(/steam:\/\/joinlobby\/\d+\/\d+/);
+    // console.log(`[SEAF] 로비 링크 추출 시도 (${postId}):`, lobbyMatch[0]);
     if (lobbyMatch) {
       return lobbyMatch[0];
     }
-    
-    // Steam 프로필 URL에서 로비 링크 추출
-    const profileMatch = html.match(/https?:\/\/steamcommunity\.com\/(id|profiles)\/[^\s"<>]+/);
-    if (profileMatch) {
-      const profileUrl = profileMatch[0];
-      const lobbyLink = await fetchSteamLobby(profileUrl);
-      if (lobbyLink) return lobbyLink;
-    }
-    
+    // deprecated: Steam 프로필 URL에서 로비 링크 추출 - 헬망호 양식과 맞지 않음
     return null;
   } catch (error) {
     console.error(`[SEAF] 로비 링크 추출 실패 (${postId}):`, error);
@@ -97,14 +91,15 @@ async function performDetection() {
     const html = await response.text();
     
     // 게시글 파싱 (공지 제외)
-    const postRegex = /<tr[^>]*data-no="(\d+)"[^>]*>[\s\S]*?<td class="gall_tit[^>]*>[\s\S]*?<a[^>]*>([\s\S]*?)<\/a>/g;
+    const postRegex = /<tr[^>]*data-no="(\d+)"[^>]*>[\s\S]*?<td class="gall_tit[^>]*>[\s\S]*?<a[^>]*>([\s\S]*?)<\/a>[\s\S]*?<td class="gall_date" title="([^"]+)"/g;
     const matches = [...html.matchAll(postRegex)];
     
     const posts = matches
       .filter(m => !m[0].includes('icon_notice') && !m[0].includes('icon_fnews'))
       .map(m => ({
         id: parseInt(m[1]),
-        title: m[2].replace(/<[^>]*>?/gm, '').trim()
+        title: m[2].replace(/<[^>]*>?/gm, '').trim(),
+        fullDateStr: m[3]
       }));
 
     if (posts.length === 0) {
@@ -118,12 +113,23 @@ async function performDetection() {
       return;
     }
 
-    // 신규 게시글 필터링 (ID가 더 큰 것만)
-    const newPosts = posts.filter(p => p.id > lastSeenPostId);
-    
+    const now = Date.now();
+    // 신규 게시글 필터링 
+    const newPosts = posts.filter(p => {
+      // ID가 더 큰 것만
+      const isNew = p.id > lastSeenPostId;
+      // 최근 n분 이내
+      let isRecent = true;
+      if (p.fullDateStr) {
+        const postTime = new Date(p.fullDateStr.replace(/-/g, '/')).getTime();
+        isRecent = (now - postTime < DEADLINE);
+      }
+      return isNew && isRecent;
+    });
+
+    console.log(`[SEAF] 신규 게시글 ${newPosts.length}개 발견`);
+
     if (newPosts.length > 0) {
-      console.log(`[SEAF] 신규 게시글 ${newPosts.length}개 발견`);
-      
       // 오래된 것부터 처리
       for (const post of newPosts.reverse()) {
         await processNewPost(post, seaf_settings);
@@ -145,18 +151,7 @@ async function performDetection() {
 async function processNewPost(post, settings) {
   const { id, title } = post;
   
-  console.log(`[SEAF] 게시글 처리 시작: [${id}] ${title}`);
-  
-  // 로비 링크 추출
-  const lobbyLink = await extractLobbyLink(id);
-  
-  // 로비 링크가 없으면 알림 안 보냄
-  if (!lobbyLink) {
-    console.log(`[SEAF] 로비 링크 없음, 알림 스킵: [${id}] ${title}`);
-    return;
-  }
-  
-  console.log(`[SEAF] 로비 링크 발견: ${lobbyLink}`);
+  console.log(`[SEAF] 새 게시글 발견: ${id}`);
   
   // 모든 디시 탭에 알림 전송
   const tabs = await chrome.tabs.query({ 
@@ -164,18 +159,17 @@ async function processNewPost(post, settings) {
   });
   
   for (const tab of tabs) {
+    console.log(`[SEAF] ${tab.id} 탭에 알림 전송: [${id}] ${title}`);
     chrome.tabs.sendMessage(tab.id, {
       type: "SEAF_NEW_POST",
       postId: id,
       title: title,
-      lobbyLink: lobbyLink,
+      lobbyLink: 1,
       toastDuration: (settings.toastDuration || 6) * 1000 // 초 → 밀리초 변환
     }).catch(() => {
-      // content script 로드 안 된 탭 무시
+      console.log(`[SEAF] ${tab.id} 전송 실패`);
     });
   }
-  
-  console.log(`[SEAF] 알림 전송 완료: [${id}] ${title}`);
 }
 
 /**
@@ -188,6 +182,12 @@ chrome.alarms.onAlarm.addListener((alarm) => {
 });
 
 chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
+  // deprecated
+  if (request.type === "RESET_LAST_ID") {
+    console.log(`[SEAF] lastSeenPostId 초기화됨`);
+    lastSeenPostId = null;
+  }
+
   if (request.type === "SETTINGS_UPDATED") {
     setupAlarm();
   }
