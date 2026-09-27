@@ -200,7 +200,9 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
   }
   
   if (request.type === "GET_LOBBY_LINK_FROM_PROFILE") {
+    console.log('[SEAF] 프로필 링크 요청 받음:', request.url);
     fetchSteamLobby(request.url).then(link => {
+      console.log('[SEAF] 추출된 링크:', link);
       sendResponse({ link });
     });
     return true; // 비동기 응답

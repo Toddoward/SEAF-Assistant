@@ -7,7 +7,7 @@ const SEAF_CONTENT = {
   /**
    * 페이지 타입 감지
    */
-  isWritePage: () => window.location.href.includes('board/write'),
+  isWritePage: () => window.location.href.includes('board/write') || window.location.href.includes('board/modify'),
   isListPage: () => window.location.href.includes('board/lists'),
   isViewPage: () => window.location.href.includes('board/view'),
   isHelldiversseriesgallery: () => window.location.href.includes('id=helldiversseries'),
@@ -170,11 +170,16 @@ const SEAF_CONTENT = {
       chrome.runtime.sendMessage(
         { type: "GET_LOBBY_LINK_FROM_PROFILE", url: seaf_settings.steamUrl },
         (response) => {
+          console.log('[SEAF] 응답 받음:', response); // ← 추가
+          console.log('[SEAF] 링크:', response?.link); // ← 추가
+    
           const lobbyLink = response?.link;
           const lobbyHtml = lobbyLink
-            ? `<div style="text-align:center; margin:20px 0;">
-                 <a href="${lobbyLink}" style="display:inline-block; background-color:#41639C; color:#ffffff; padding:12px 30px; border-radius:5px; text-decoration:none; font-weight:bold; font-size:16px;">☄️ 즉시 참가하기 ☄️</a>
-               </div>`
+            ? `<p style="text-align:center; background:#e8f0ff; padding:20px; border:3px solid #41639C; border-radius:8px; margin:20px 0;">
+                🚀빠른 참여🚀<br>
+                <a href="${lobbyLink}" target="_blank">${lobbyLink}</a><br>
+                <span style="font-size:12px; color:#666;">위 링크를 클릭하여 참가하세요</span>
+              </p>`
             : '<p style="text-align:center; color:#ff0000;">[로비 링크 추출 실패: 스팀 프로필이 비공개거나 게임 로비를 찾을 수 없습니다.]</p>';
           
           const contentHtml = seaf_settings.customContent
@@ -183,7 +188,7 @@ const SEAF_CONTENT = {
 
           const manifestData = chrome.runtime.getManifest();
           editor.innerHTML = `
-            <div style="text-align:center;">
+            <div class="seaf-lobby-btn-wrap" style="text-align:center;">
               ${lobbyHtml}
               <p><br></p>
               ${contentHtml}
